@@ -1314,6 +1314,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "smpp-core"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8a7e1ffff5e827c12a4d4be72625ed13679db32a55f47c8e0446d777615b465"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "smpp-hub"
 version = "0.1.1"
 dependencies = [
@@ -1322,7 +1331,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
- "smpp-core",
+ "smpp-core 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "sqlx",
  "thiserror",
  "tokio",

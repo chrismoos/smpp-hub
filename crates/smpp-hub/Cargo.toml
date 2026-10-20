@@ -17,7 +17,7 @@ standalone = ["dep:sqlx", "dep:clap", "dep:tracing-subscriber"]
 schema = ["dep:utoipa"]
 
 [dependencies]
-smpp-core = { version = "0.1.1", path = "../smpp-core" }
+smpp-core = "0.1"
 tokio = { version = "1", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
