@@ -1,0 +1,5 @@
+.git
+target
+*.local.json
+*.sqlite*
+__pycache__

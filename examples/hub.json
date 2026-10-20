@@ -1,0 +1,30 @@
+{
+  "listen": "127.0.0.1:2775",
+  "system_id": "smpp-hub",
+  "database": "messages.sqlite",
+  "peers": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "name": "First network",
+      "smpp_system_id": "network-a",
+      "bind_role": "site_binds_to_hub",
+      "messages_per_hour": 600,
+      "password": "exampleA",
+      "numbers": [
+        "1000"
+      ]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "name": "Second network",
+      "smpp_system_id": "network-b",
+      "bind_role": "hub_binds_to_site",
+      "messages_per_hour": 600,
+      "password": "exampleB",
+      "numbers": [
+        "1001"
+      ],
+      "address": "127.0.0.1:2776"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+[package]
+name = "smpp-core"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+authors = ["Chris Moos"]
+description = "SMPP v3.4 codec, session state machine, text encoding, and Tokio transport."
+repository = "https://github.com/chrismoos/smpp-hub"
+keywords = ["smpp", "sms", "smsc", "telecom", "tokio"]
+categories = ["network-programming"]
+
+
+[dependencies]
+tokio = { version = "1", features = ["io-util", "net", "macros", "rt", "time", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+assign_op_pattern = "allow"
+len_without_is_empty = "allow"
+manual_is_multiple_of = "allow"
+new_without_default = "allow"
+result_large_err = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"

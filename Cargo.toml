@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/smpp-core", "crates/smpp-hub"]
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+assign_op_pattern = "allow"
+len_without_is_empty = "allow"
+manual_is_multiple_of = "allow"
+new_without_default = "allow"
+result_large_err = "allow"
+too_many_arguments = "allow"
+type_complexity = "allow"
