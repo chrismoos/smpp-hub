@@ -308,14 +308,36 @@ async fn duplicate_sessions_cannot_drain_one_peers_queue() {
 }
 
 #[test]
-fn shipped_example_has_valid_bind_credentials() {
-    let s: Settings = serde_json::from_str(include_str!("../../../examples/hub.json")).unwrap();
-    for peer in s.peers {
-        let now = std::time::Instant::now();
-        let mut session =
-            smpp_core::Session::new(Config::esme(peer.site.smpp_system_id, peer.password), now);
-        smpp_core::encode(&session.bind(now).unwrap()).unwrap();
+fn shipped_examples_have_valid_bind_credentials() {
+    for example in [
+        include_str!("../../../examples/hub.json"),
+        include_str!("../../../examples/upstream.json"),
+    ] {
+        let s: Settings = serde_json::from_str(example).unwrap();
+        for peer in s.peers {
+            let now = std::time::Instant::now();
+            let mut session =
+                smpp_core::Session::new(Config::esme(peer.site.smpp_system_id, peer.password), now);
+            smpp_core::encode(&session.bind(now).unwrap()).unwrap();
+        }
     }
+}
+
+#[tokio::test]
+async fn the_upstream_example_keeps_local_numbers_local() {
+    let mut s: Settings =
+        serde_json::from_str(include_str!("../../../examples/upstream.json")).unwrap();
+    s.database = settings().database;
+    let store = SqliteStore::open(s.clone()).await.unwrap();
+    for (number, peer) in [("1001", 0), ("1004", 1), ("1006", 2), ("7025550100", 2)] {
+        assert_eq!(
+            store.site_for_number(number).await.unwrap(),
+            Some(s.peers[peer].site.id),
+            "{number}"
+        );
+    }
+    drop(store);
+    cleanup(s.database);
 }
 
 #[tokio::test]
@@ -327,5 +349,229 @@ async fn invalid_peer_settings_are_rejected_before_creating_storage() {
     for s in [invalid_password, self_address] {
         assert!(SqliteStore::open(s.clone()).await.is_err());
         assert!(!s.database.exists());
+    }
+}
+
+fn peer(id: u128, name: &str, role: BindRole, numbers: &[&str]) -> Peer {
+    Peer {
+        site: Site {
+            id: SiteId(uuid::Uuid::from_u128(id)),
+            name: name.into(),
+            smpp_system_id: name.into(),
+            bind_role: role,
+            messages_per_hour: None,
+        },
+        password: "secret".into(),
+        numbers: numbers.iter().map(|n| n.to_string()).collect(),
+        address: (role == BindRole::HubBindsToSite).then(|| "127.0.0.1:9".parse().unwrap()),
+    }
+}
+
+fn hub_settings(peers: Vec<Peer>) -> Settings {
+    Settings {
+        peers,
+        ..settings()
+    }
+}
+
+#[tokio::test]
+async fn exact_numbers_win_and_patterns_match_whole_numbers_in_order() {
+    let s = hub_settings(vec![
+        peer(1, "wide", BindRole::SiteBindsToHub, &["70[0-9]+"]),
+        peer(2, "exact", BindRole::SiteBindsToHub, &["7025550100"]),
+        peer(3, "rest", BindRole::SiteBindsToHub, &[".*"]),
+    ]);
+    let store = SqliteStore::open(s.clone()).await.unwrap();
+    let owner = |n: &'static str| {
+        let store = &store;
+        async move {
+            store
+                .site_for_number(n)
+                .await
+                .unwrap()
+                .unwrap()
+                .as_uuid()
+                .as_u128()
+        }
+    };
+    assert_eq!(
+        owner("7025550100").await,
+        2,
+        "an exact number beats an earlier pattern"
+    );
+    assert_eq!(owner("7025550101").await, 1);
+    assert_eq!(
+        owner("17025550101").await,
+        3,
+        "patterns match the whole number"
+    );
+    drop(store);
+    cleanup(s.database);
+}
+
+#[tokio::test]
+async fn bad_number_patterns_are_rejected_at_startup() {
+    for numbers in [
+        &["70[0-9"][..],
+        &[""][..],
+        &["1000", "1000"][..],
+        &["911"][..],
+    ] {
+        let s = hub_settings(vec![peer(1, "a", BindRole::SiteBindsToHub, numbers)]);
+        assert!(SqliteStore::open(s.clone()).await.is_err(), "{numbers:?}");
+        assert!(!s.database.exists());
+    }
+}
+
+async fn ack(connection: &mut Connection) -> CommandStatus {
+    match tokio::time::timeout(TIMEOUT, connection.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+    {
+        Action::MessageAck { status, .. } => status,
+        other => panic!("{other:?}"),
+    }
+}
+
+async fn receive(connection: &mut Connection) -> MessageBody {
+    match tokio::time::timeout(TIMEOUT, connection.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+    {
+        Action::Message { sequence, body } => {
+            connection
+                .send(connection.respond_to_message(sequence, CommandStatus::Ok, "id".into()))
+                .await
+                .unwrap();
+            *body
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+fn text(source: &str, destination: &str) -> MessageBody {
+    MessageBody {
+        source: Address::unknown(source),
+        destination: Address::unknown(destination),
+        text: format!("{source} to {destination}").into_bytes(),
+        ..MessageBody::default()
+    }
+}
+
+async fn client(hub: &Arc<Hub>, system_id: &str) -> Connection {
+    let (near, far) = tokio::io::duplex(65536);
+    let h = hub.clone();
+    tokio::spawn(async move { h.serve_inbound(far).await });
+    let mut connection = Connection::new(
+        near,
+        Config::esme(system_id, "secret"),
+        ConnectionOptions::default(),
+    );
+    bound(&mut connection).await;
+    connection
+}
+
+/// A local hub serving two networks forwards everything else to an upstream
+/// hub through a catch-all, the way several networks share one registry site.
+#[tokio::test]
+async fn a_catch_all_peer_links_local_networks_to_an_upstream_hub() {
+    let upstream_settings = hub_settings(vec![
+        peer(
+            10,
+            "home",
+            BindRole::SiteBindsToHub,
+            &["1000", "1001", "3000"],
+        ),
+        peer(11, "remote", BindRole::SiteBindsToHub, &["2000"]),
+    ]);
+    let local_settings = hub_settings(vec![
+        peer(1, "net-a", BindRole::SiteBindsToHub, &["1000"]),
+        peer(2, "net-b", BindRole::SiteBindsToHub, &["1001"]),
+        Peer {
+            site: Site {
+                smpp_system_id: "home".into(),
+                ..peer(3, "registry", BindRole::HubBindsToSite, &[]).site
+            },
+            ..peer(3, "registry", BindRole::HubBindsToSite, &[".*"])
+        },
+    ]);
+    let upstream_store = Arc::new(SqliteStore::open(upstream_settings.clone()).await.unwrap());
+    let local_store = Arc::new(SqliteStore::open(local_settings.clone()).await.unwrap());
+    let upstream = Arc::new(Hub::new(upstream_store.clone(), "registry"));
+    let local = Arc::new(Hub::new(local_store.clone(), "local"));
+
+    let (near, far) = tokio::io::duplex(65536);
+    let h = upstream.clone();
+    tokio::spawn(async move { h.serve_inbound(far).await });
+    let h = local.clone();
+    let registry_peer = local_settings.peers[2].site.clone();
+    tokio::spawn(async move { h.serve_outbound(near, registry_peer).await });
+
+    let mut a = client(&local, "net-a").await;
+    let mut b = client(&local, "net-b").await;
+    let mut remote = client(&upstream, "remote").await;
+
+    a.send_message(text("1000", "1001")).await.unwrap();
+    assert_eq!(ack(&mut a).await, CommandStatus::Ok);
+    assert_eq!(receive(&mut b).await.source.digits, "1000");
+    assert_eq!(
+        upstream_store
+            .queued_for_site(SiteId(uuid::Uuid::from_u128(11)))
+            .await
+            .unwrap(),
+        0,
+        "local traffic stays local"
+    );
+
+    a.send_message(text("1000", "2000")).await.unwrap();
+    assert_eq!(ack(&mut a).await, CommandStatus::Ok);
+    assert_eq!(receive(&mut remote).await.source.digits, "1000");
+
+    remote.send_message(text("2000", "1001")).await.unwrap();
+    assert_eq!(ack(&mut remote).await, CommandStatus::Ok);
+    assert_eq!(receive(&mut b).await.source.digits, "2000");
+
+    a.send_message(text("2000", "1001")).await.unwrap();
+    assert_eq!(
+        ack(&mut a).await,
+        CommandStatus::InvalidSourceAddress,
+        "a local network cannot send as another operator's number"
+    );
+
+    remote.send_message(text("2000", "3000")).await.unwrap();
+    let id = match tokio::time::timeout(TIMEOUT, remote.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap()
+    {
+        Action::MessageAck {
+            status: CommandStatus::Ok,
+            message_id,
+            ..
+        } => MessageId(message_id.parse().unwrap()),
+        other => panic!("{other:?}"),
+    };
+    tokio::time::timeout(TIMEOUT, async {
+        while upstream_store.message(id).await.unwrap().unwrap().state != MessageState::Failed {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the local hub refuses a number only its catch-all back to the sender matches");
+    assert_eq!(
+        local_store
+            .queued_for_site(SiteId(uuid::Uuid::from_u128(3)))
+            .await
+            .unwrap(),
+        0
+    );
+
+    for path in [upstream_settings.database, local_settings.database] {
+        cleanup(path);
     }
 }

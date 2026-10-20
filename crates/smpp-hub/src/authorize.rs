@@ -13,6 +13,7 @@ pub enum Rejection {
     SourceNotOwned { source: String, site: SiteId },
     UnknownDestination(String),
     ReservedDestination(String),
+    BackToSender { destination: String, site: SiteId },
     Throttled { site: SiteId },
     QueueFull { site: SiteId },
 }
@@ -22,9 +23,9 @@ impl Rejection {
         match self {
             Self::StorageUnavailable => CommandStatus::SystemError,
             Self::SourceNotOwned { .. } => CommandStatus::InvalidSourceAddress,
-            Self::UnknownDestination(_) | Self::ReservedDestination(_) => {
-                CommandStatus::InvalidDestAddress
-            }
+            Self::UnknownDestination(_)
+            | Self::ReservedDestination(_)
+            | Self::BackToSender { .. } => CommandStatus::InvalidDestAddress,
             Self::Throttled { .. } => CommandStatus::Throttled,
             Self::QueueFull { .. } => CommandStatus::MessageQueueFull,
         }
@@ -41,6 +42,9 @@ impl std::fmt::Display for Rejection {
             Self::UnknownDestination(number) => write!(f, "{number} is not on this network"),
             Self::ReservedDestination(number) => {
                 write!(f, "{number} is reserved and never routes")
+            }
+            Self::BackToSender { destination, site } => {
+                write!(f, "{destination} routes back to site {site}, which sent it")
             }
             Self::Throttled { site } => write!(f, "site {site} is over its message rate"),
             Self::QueueFull { site } => write!(f, "the queue for site {site} is full"),
@@ -79,6 +83,14 @@ pub fn authorize(lookup: &Lookup<'_>) -> Result<Authorization, Rejection> {
             lookup.destination.to_string(),
         ));
     };
+    // A catch-all route sends a number no other peer owns back to the peer
+    // that forwarded it, and two hubs would pass it between them until expiry.
+    if destination_site == lookup.sending_site {
+        return Err(Rejection::BackToSender {
+            destination: lookup.destination.to_string(),
+            site: destination_site,
+        });
+    }
     if lookup.sent_this_hour >= lookup.rate_limit {
         return Err(Rejection::Throttled {
             site: lookup.sending_site,
@@ -169,6 +181,16 @@ mod tests {
     }
 
     #[test]
+    fn a_message_is_never_routed_back_to_the_site_that_sent_it() {
+        let mut l = lookup("4155550118", "9995550000");
+        l.source_owner = Some(site(1));
+        l.destination_owner = Some(site(1));
+        let err = authorize(&l).unwrap_err();
+        assert!(matches!(err, Rejection::BackToSender { .. }));
+        assert_eq!(err.status(), CommandStatus::InvalidDestAddress);
+    }
+
+    #[test]
     fn reserved_numbers_are_refused_at_routing_time() {
         for reserved in ["911", "112"] {
             let mut l = lookup("7025550100", reserved);
@@ -219,6 +241,10 @@ mod tests {
             },
             Rejection::UnknownDestination("x".into()),
             Rejection::ReservedDestination("911".into()),
+            Rejection::BackToSender {
+                destination: "x".into(),
+                site: site(1),
+            },
         ];
         for rejection in permanent {
             assert!(

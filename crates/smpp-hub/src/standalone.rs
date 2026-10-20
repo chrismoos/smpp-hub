@@ -1,7 +1,11 @@
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
 
@@ -31,6 +35,29 @@ pub struct Settings {
 pub struct SqliteStore {
     pool: SqlitePool,
     settings: Settings,
+    routes: Routes,
+}
+
+/// Where each number goes. An exact number always wins. Otherwise the first
+/// matching pattern in configuration order does, across peers in file order.
+struct Routes {
+    exact: HashMap<String, SiteId>,
+    patterns: Vec<(Regex, SiteId)>,
+}
+
+impl Routes {
+    fn owner(&self, number: &str) -> Option<SiteId> {
+        self.exact.get(number).copied().or_else(|| {
+            self.patterns
+                .iter()
+                .find(|(pattern, _)| pattern.is_match(number))
+                .map(|(_, site)| *site)
+        })
+    }
+}
+
+fn is_exact(number: &str) -> bool {
+    number.bytes().all(|b| b.is_ascii_digit())
 }
 
 fn failure(error: impl std::fmt::Display) -> StoreError {
@@ -41,7 +68,10 @@ impl SqliteStore {
     pub async fn open(settings: Settings) -> Result<Self, StoreError> {
         let mut ids = HashSet::new();
         let mut systems = HashSet::new();
-        let mut numbers = HashSet::new();
+        let mut routes = Routes {
+            exact: HashMap::new(),
+            patterns: Vec::new(),
+        };
         for peer in &settings.peers {
             let now = std::time::Instant::now();
             let mut session = smpp_core::Session::new(
@@ -63,14 +93,28 @@ impl SqliteStore {
                 ));
             }
             for number in &peer.numbers {
-                if number.is_empty()
-                    || !number.bytes().all(|b| b.is_ascii_digit())
-                    || !numbers.insert(number)
-                    || settings.reserved_numbers.contains(number)
-                {
-                    return Err(StoreError(
-                        "invalid, reserved, or duplicate number route".into(),
-                    ));
+                if number.is_empty() {
+                    return Err(StoreError(format!(
+                        "peer {} lists an empty number",
+                        peer.site.name
+                    )));
+                }
+                if is_exact(number) {
+                    if settings.reserved_numbers.contains(number)
+                        || routes.exact.insert(number.clone(), peer.site.id).is_some()
+                    {
+                        return Err(StoreError(format!(
+                            "{number} is reserved or listed for more than one peer"
+                        )));
+                    }
+                } else {
+                    let pattern = Regex::new(&format!("^(?:{number})$")).map_err(|error| {
+                        StoreError(format!(
+                            "peer {} has an invalid number pattern {number:?}: {error}",
+                            peer.site.name
+                        ))
+                    })?;
+                    routes.patterns.push((pattern, peer.site.id));
                 }
             }
         }
@@ -88,7 +132,11 @@ impl SqliteStore {
             .run(&pool)
             .await
             .map_err(failure)?;
-        Ok(Self { pool, settings })
+        Ok(Self {
+            pool,
+            settings,
+            routes,
+        })
     }
 
     async fn messages(&self) -> Result<Vec<QueuedMessage>, StoreError> {
@@ -146,12 +194,7 @@ impl Store for SqliteStore {
             .ok_or_else(|| StoreError("unknown SMPP peer".into()))
     }
     async fn site_for_number(&self, number: &str) -> Result<Option<SiteId>, StoreError> {
-        Ok(self
-            .settings
-            .peers
-            .iter()
-            .find(|p| p.numbers.iter().any(|n| n == number))
-            .map(|p| p.site.id))
+        Ok(self.routes.owner(number))
     }
     async fn accept_message(&self, m: NewMessage) -> Result<MessageId, StoreError> {
         let message = QueuedMessage {

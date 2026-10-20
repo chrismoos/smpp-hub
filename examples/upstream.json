@@ -1,0 +1,33 @@
+{
+  "listen": "127.0.0.1:2775",
+  "system_id": "local-hub",
+  "database": "messages.sqlite",
+  "peers": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "name": "Network A",
+      "smpp_system_id": "net-a",
+      "bind_role": "site_binds_to_hub",
+      "password": "exampleA",
+      "numbers": ["1000", "1001"]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "name": "Network B",
+      "smpp_system_id": "net-b",
+      "bind_role": "site_binds_to_hub",
+      "password": "exampleB",
+      "numbers": ["100[2-5]"]
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "name": "Upstream hub",
+      "smpp_system_id": "upstream-id",
+      "bind_role": "hub_binds_to_site",
+      "address": "100.71.0.1:2775",
+      "messages_per_hour": 3000,
+      "password": "exampleU",
+      "numbers": [".*"]
+    }
+  ]
+}
