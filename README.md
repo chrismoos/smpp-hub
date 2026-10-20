@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/chrismoos/smpp-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/chrismoos/smpp-hub/actions/workflows/ci.yml)
 [![smpp-core](https://img.shields.io/crates/v/smpp-core.svg?label=smpp-core)](https://crates.io/crates/smpp-core)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/chrismoos/smpp-hub/blob/main/LICENSE)
 
 Route SMS between networks with a standalone SMPP server, or embed the hub in an application with its own authentication and storage.
 

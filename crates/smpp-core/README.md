@@ -1,7 +1,7 @@
 # smpp-core
 
 [![CI](https://github.com/chrismoos/smpp-hub/actions/workflows/ci.yml/badge.svg)](https://github.com/chrismoos/smpp-hub/actions/workflows/ci.yml)
-[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://github.com/chrismoos/smpp-hub/blob/main/LICENSE)
 
 A Rust library for sending and receiving SMS over SMPP v3.4. Use it to connect to a message center or accept connections from SMS applications.
 
